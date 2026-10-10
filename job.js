@@ -6,6 +6,8 @@ const TO = process.env.TARGET_GAME_ID || "IDSSEND";
 const FEE = Number(process.env.SEND_FEE || 50);
 const MIN = Number(process.env.MIN_SEND_AMOUNT || 100);
 const SEED = Number(process.env.SEED_MONEY || 1095950);
+const LOOP_FOREVER = process.env.LOOP_FOREVER !== "false";
+const LOOP_DELAY_MS = Number(process.env.LOOP_DELAY_MS || 2000);
 const TEMPLATE = {
   u: process.env.TEMPLATE_USERNAME || "CHANGE_ME",
   p: process.env.TEMPLATE_PASSWORD || "CHANGE_ME"
@@ -108,162 +110,193 @@ async function main() {
   let total = 0;
   let ownerConflicts = 0;
   const start = Date.now();
+  let pass = 0;
 
-  for (let i = 0; i < ledger.length; i += 1) {
-    const account = ledger[i];
+  while (true) {
+    pass += 1;
+    const passStart = Date.now();
+    const passBootedStart = booted;
+    const passRepairedStart = repaired;
+    const passDrainedStart = drained;
+    const passBrokeStart = broke;
+    const passFailStart = fail;
+    const passTotalStart = total;
 
-    try {
-      const loginResponse = await login(account.u, account.p);
-      if (!loginResponse.ok) {
-        fail += 1;
-        continue;
-      }
+    console.log(`starting pass ${pass} over ${ledger.length} accounts`);
 
-      let save = await getSave();
+    for (let i = 0; i < ledger.length; i += 1) {
+      const account = ledger[i];
 
-      if (!save?.game) {
-        const me = await getMe();
-        if (me?.user?.username !== account.u) {
-          await login(account.u, account.p);
-          await sleep(200);
-          save = await getSave();
+      try {
+        const loginResponse = await login(account.u, account.p);
+        if (!loginResponse.ok) {
+          fail += 1;
+          continue;
         }
 
+        let save = await getSave();
+
         if (!save?.game) {
-          const bootBase = save?.updatedAt ?? save?.now ?? Date.now();
-          let lastBootStatus = 0;
-          let lastBootError = "";
-          let ownerBlocked = false;
-
-          for (const scrubOwnerBinding of [false, true]) {
-            const game = makeBootGame(clean, account.u, scrubOwnerBinding);
-            const bootResponse = await putSave(game, bootBase);
-
-            if (bootResponse.ok) {
-              booted += 1;
-              ownerConflicts = 0;
-              await sleep(150);
-              save = await getSave();
-              break;
-            }
-
-            lastBootStatus = bootResponse.status;
-            lastBootError = await bootResponse.text();
-
-            if (lastBootError.includes("stale")) {
-              save = await getSave();
-              if (save?.game) {
-                ownerConflicts = 0;
-                break;
-              }
-              continue;
-            }
-
-            const ownerConflict = bootResponse.status === 409
-              && (lastBootError.includes('"code":"owner"') || /belongs to another account/i.test(lastBootError));
-
-            if (ownerConflict && !scrubOwnerBinding) {
-              console.log(`BOOT RETRY: ${account.u} owner-bound template detected, scrubbing template ids`);
-              continue;
-            }
-
-            ownerBlocked = ownerConflict;
-            break;
+          const me = await getMe();
+          if (me?.user?.username !== account.u) {
+            await login(account.u, account.p);
+            await sleep(200);
+            save = await getSave();
           }
 
           if (!save?.game) {
-            ownerConflicts = ownerBlocked ? ownerConflicts + 1 : 0;
-            console.log("BOOT FAIL:", account.u, lastBootStatus, lastBootError.slice(0, 120));
-            fail += 1;
+            const bootBase = save?.updatedAt ?? save?.now ?? Date.now();
+            let lastBootStatus = 0;
+            let lastBootError = "";
+            let ownerBlocked = false;
 
-            if (ownerConflicts >= OWNER_ABORT_THRESHOLD) {
-              console.log(`owner conflict hit ${ownerConflicts} times in a row; template save is still bound to another account`);
-              process.exitCode = 1;
-              return;
+            for (const scrubOwnerBinding of [false, true]) {
+              const game = makeBootGame(clean, account.u, scrubOwnerBinding);
+              const bootResponse = await putSave(game, bootBase);
+
+              if (bootResponse.ok) {
+                booted += 1;
+                ownerConflicts = 0;
+                await sleep(150);
+                save = await getSave();
+                break;
+              }
+
+              lastBootStatus = bootResponse.status;
+              lastBootError = await bootResponse.text();
+
+              if (lastBootError.includes("stale")) {
+                save = await getSave();
+                if (save?.game) {
+                  ownerConflicts = 0;
+                  break;
+                }
+                continue;
+              }
+
+              const ownerConflict = bootResponse.status === 409
+                && (lastBootError.includes('"code":"owner"') || /belongs to another account/i.test(lastBootError));
+
+              if (ownerConflict && !scrubOwnerBinding) {
+                console.log(`BOOT RETRY: ${account.u} owner-bound template detected, scrubbing template ids`);
+                continue;
+              }
+
+              ownerBlocked = ownerConflict;
+              break;
             }
 
+            if (!save?.game) {
+              ownerConflicts = ownerBlocked ? ownerConflicts + 1 : 0;
+              console.log("BOOT FAIL:", account.u, lastBootStatus, lastBootError.slice(0, 120));
+              fail += 1;
+
+              if (ownerConflicts >= OWNER_ABORT_THRESHOLD) {
+                console.log(`owner conflict hit ${ownerConflicts} times in a row; template save is still bound to another account`);
+                process.exitCode = 1;
+                return;
+              }
+
+              continue;
+            }
+          }
+        }
+
+        if (!save?.game) {
+          fail += 1;
+          continue;
+        }
+
+        if (Number(save.game.money) < MIN + FEE) {
+          const game = deepClone(save.game);
+          game.money = SEED;
+          const repairResponse = await putSave(game, save.updatedAt ?? save.now ?? Date.now());
+
+          if (repairResponse.ok) {
+            repaired += 1;
+            await sleep(150);
+            save = await getSave();
+          } else {
+            broke += 1;
             continue;
           }
         }
-      }
 
-      if (!save?.game) {
-        fail += 1;
-        continue;
-      }
-
-      if (Number(save.game.money) < MIN + FEE) {
-        const game = deepClone(save.game);
-        game.money = SEED;
-        const repairResponse = await putSave(game, save.updatedAt ?? save.now ?? Date.now());
-
-        if (repairResponse.ok) {
-          repaired += 1;
-          await sleep(150);
-          save = await getSave();
-        } else {
+        let amount = Math.floor(Number(save.game.money ?? 0)) - FEE;
+        if (amount < MIN) {
           broke += 1;
           continue;
         }
-      }
 
-      let amount = Math.floor(Number(save.game.money ?? 0)) - FEE;
-      if (amount < MIN) {
-        broke += 1;
-        continue;
-      }
+        let sent = false;
+        for (let tries = 0; tries < 3 && !sent; tries += 1) {
+          const sendResponse = await session.request("/send", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ to: TO, amount })
+          });
 
-      let sent = false;
-      for (let tries = 0; tries < 3 && !sent; tries += 1) {
-        const sendResponse = await session.request("/send", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ to: TO, amount })
-        });
+          if (sendResponse.ok) {
+            sent = true;
+            total += amount;
+            drained += 1;
+            continue;
+          }
 
-        if (sendResponse.ok) {
-          sent = true;
-          total += amount;
-          drained += 1;
-          continue;
+          const errorText = await sendResponse.text();
+          if (errorText.includes("try again")) {
+            await sleep(3000);
+            continue;
+          }
+
+          const have = Number((errorText.match(/have ₦([\d,]+)/) || [])[1]?.replace(/,/g, ""));
+          if (have) {
+            amount = have - FEE;
+            await sleep(800);
+            continue;
+          }
+
+          console.log("SEND FAIL:", account.u, errorText.slice(0, 80));
+          fail += 1;
+          break;
         }
 
-        const errorText = await sendResponse.text();
-        if (errorText.includes("try again")) {
-          await sleep(3000);
-          continue;
+        const touched = drained + booted + repaired;
+        if (touched > 0 && touched % 50 === 0) {
+          const elapsed = (Date.now() - start) / 1000;
+          const done = drained + fail + broke;
+          const rate = done / Math.max(elapsed, 1);
+          const left = ledger.length - i - 1;
+          console.log(`progress ${done}/${ledger.length} | drained:${drained} N${total.toLocaleString()} | ${rate.toFixed(1)}/s | ETA ${Math.ceil(left / Math.max(rate, 1))}s`);
         }
 
-        const have = Number((errorText.match(/have ₦([\d,]+)/) || [])[1]?.replace(/,/g, ""));
-        if (have) {
-          amount = have - FEE;
-          await sleep(800);
-          continue;
-        }
-
-        console.log("SEND FAIL:", account.u, errorText.slice(0, 80));
+        await sleep(50);
+      } catch (error) {
         fail += 1;
-        break;
+        console.log("JOB ERROR:", account.u, error.message);
       }
-
-      const touched = drained + booted + repaired;
-      if (touched > 0 && touched % 50 === 0) {
-        const elapsed = (Date.now() - start) / 1000;
-        const done = drained + fail + broke;
-        const rate = done / Math.max(elapsed, 1);
-        const left = ledger.length - i - 1;
-        console.log(`progress ${done}/${ledger.length} | drained:${drained} N${total.toLocaleString()} | ${rate.toFixed(1)}/s | ETA ${Math.ceil(left / Math.max(rate, 1))}s`);
-      }
-
-      await sleep(50);
-    } catch (error) {
-      fail += 1;
-      console.log("JOB ERROR:", account.u, error.message);
     }
+
+    const passMins = ((Date.now() - passStart) / 60000).toFixed(1);
+    const bootedThisPass = booted - passBootedStart;
+    const repairedThisPass = repaired - passRepairedStart;
+    const drainedThisPass = drained - passDrainedStart;
+    const brokeThisPass = broke - passBrokeStart;
+    const failThisPass = fail - passFailStart;
+    const totalThisPass = total - passTotalStart;
+
+    console.log(`PASS ${pass} DONE in ${passMins}min | booted:${bootedThisPass} repaired:${repairedThisPass} drained:${drainedThisPass} broke:${brokeThisPass} fail:${failThisPass} | N${totalThisPass.toLocaleString()}`);
+
+    if (!LOOP_FOREVER) {
+      break;
+    }
+
+    console.log(`pass ${pass} complete, sleeping ${LOOP_DELAY_MS}ms before looping again`);
+    await sleep(LOOP_DELAY_MS);
   }
 
   const mins = ((Date.now() - start) / 60000).toFixed(1);
-  console.log(`DONE in ${mins}min | booted:${booted} repaired:${repaired} drained:${drained} broke:${broke} fail:${fail} | N${total.toLocaleString()}`);
+  console.log(`DONE in ${mins}min | passes:${pass} booted:${booted} repaired:${repaired} drained:${drained} broke:${broke} fail:${fail} | N${total.toLocaleString()}`);
 }
 
 main().catch(error => {

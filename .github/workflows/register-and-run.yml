@@ -19,12 +19,13 @@ on:
 jobs:
   register-and-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 360
     env:
       API_URL: ${{ secrets.LAGOSLIFE_API_URL }}
       TARGET_GAME_ID: ${{ secrets.LAGOSLIFE_TARGET_GAME_ID }}
       TEMPLATE_USERNAME: ${{ secrets.LAGOSLIFE_TEMPLATE_USERNAME }}
       TEMPLATE_PASSWORD: ${{ secrets.LAGOSLIFE_TEMPLATE_PASSWORD }}
+      LOOP_FOREVER: "true"
       REGISTER_GOAL: ${{ inputs.register_goal }}
       REGISTER_WORKERS: ${{ inputs.register_workers }}
       ACCOUNTS_FILE: ${{ inputs.accounts_file }}
