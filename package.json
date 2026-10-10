@@ -1,0 +1,14 @@
+{
+  "name": "lagoslife-jobs",
+  "private": true,
+  "version": "1.0.0",
+  "description": "GitHub Actions-friendly LagosLife registration and drain jobs",
+  "scripts": {
+    "register": "node reg.js",
+    "job": "node job.js",
+    "run:all": "node reg.js && node job.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
