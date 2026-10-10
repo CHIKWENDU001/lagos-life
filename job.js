@@ -1,8 +1,8 @@
 const { ApiSession } = require("./lib/api-session");
 const { loadAccounts, resolveAccountsPath } = require("./lib/accounts");
 
-const API = process.env.API_URL || "https://lagoslife.eliysites.com/api";
-const TO = process.env.TARGET_GAME_ID || "IDSSEND";
+const API = process.env.API_URL || "https://api.example.com";
+const TO = process.env.TARGET_GAME_ID || "TARGET_ID";
 const FEE = Number(process.env.SEND_FEE || 50);
 const MIN = Number(process.env.MIN_SEND_AMOUNT || 100);
 const SEED = Number(process.env.SEED_MONEY || 1095950);
@@ -174,8 +174,10 @@ async function main() {
                 continue;
               }
 
-              const ownerConflict = bootResponse.status === 409
-                && (lastBootError.includes('"code":"owner"') || /belongs to another account/i.test(lastBootError));
+              // Updated condition: Handles both 409 owner conflicts AND 400 Bad Save errors
+              const ownerConflict = (bootResponse.status === 409
+                  && (lastBootError.includes('"code":"owner"') || /belongs to another account/i.test(lastBootError)))
+                || (bootResponse.status === 400 && lastBootError.includes("Bad save"));
 
               if (ownerConflict && !scrubOwnerBinding) {
                 console.log(`BOOT RETRY: ${account.u} owner-bound template detected, scrubbing template ids`);
