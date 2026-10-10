@@ -13,6 +13,35 @@ const TEMPLATE = {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const deepClone = value => JSON.parse(JSON.stringify(value));
+const ROOT_BINDING_KEYS = new Set(["id", "_id", "gameId", "owner", "ownerId", "accountId", "userId", "phoneId", "deviceId"]);
+const SIM_BINDING_KEYS = new Set(["id", "_id", "gameId", "owner", "ownerId", "accountId", "userId", "phoneId", "deviceId", "username"]);
+const OWNER_ABORT_THRESHOLD = Number(process.env.OWNER_ABORT_THRESHOLD || 5);
+
+function stripKeys(target, keys) {
+  if (!target || typeof target !== "object") {
+    return;
+  }
+
+  for (const key of keys) {
+    delete target[key];
+  }
+}
+
+function makeBootGame(template, username, scrubOwnerBinding = false) {
+  const game = deepClone(template);
+
+  if (scrubOwnerBinding) {
+    stripKeys(game, ROOT_BINDING_KEYS);
+    stripKeys(game.sim, SIM_BINDING_KEYS);
+  }
+
+  if (game?.sim) {
+    game.sim.name = username;
+  }
+
+  game.money = SEED;
+  return game;
+}
 
 async function main() {
   const accountsPath = resolveAccountsPath();
@@ -77,6 +106,7 @@ async function main() {
   let broke = 0;
   let fail = 0;
   let total = 0;
+  let ownerConflicts = 0;
   const start = Date.now();
 
   for (let i = 0; i < ledger.length; i += 1) {
@@ -100,29 +130,59 @@ async function main() {
         }
 
         if (!save?.game) {
-          const game = deepClone(clean);
-          if (game?.sim) {
-            game.sim.name = account.u;
-          }
+          const bootBase = save?.updatedAt ?? save?.now ?? Date.now();
+          let lastBootStatus = 0;
+          let lastBootError = "";
+          let ownerBlocked = false;
 
-          const bootResponse = await putSave(game, save?.updatedAt ?? save?.now ?? Date.now());
-          if (bootResponse.ok) {
-            booted += 1;
-            await sleep(150);
-            save = await getSave();
-          } else {
-            const errorText = await bootResponse.text();
-            if (errorText.includes("stale")) {
+          for (const scrubOwnerBinding of [false, true]) {
+            const game = makeBootGame(clean, account.u, scrubOwnerBinding);
+            const bootResponse = await putSave(game, bootBase);
+
+            if (bootResponse.ok) {
+              booted += 1;
+              ownerConflicts = 0;
+              await sleep(150);
               save = await getSave();
-              if (!save?.game) {
-                fail += 1;
-                continue;
+              break;
+            }
+
+            lastBootStatus = bootResponse.status;
+            lastBootError = await bootResponse.text();
+
+            if (lastBootError.includes("stale")) {
+              save = await getSave();
+              if (save?.game) {
+                ownerConflicts = 0;
+                break;
               }
-            } else {
-              console.log("BOOT FAIL:", account.u, bootResponse.status, errorText.slice(0, 80));
-              fail += 1;
               continue;
             }
+
+            const ownerConflict = bootResponse.status === 409
+              && (lastBootError.includes('"code":"owner"') || /belongs to another account/i.test(lastBootError));
+
+            if (ownerConflict && !scrubOwnerBinding) {
+              console.log(`BOOT RETRY: ${account.u} owner-bound template detected, scrubbing template ids`);
+              continue;
+            }
+
+            ownerBlocked = ownerConflict;
+            break;
+          }
+
+          if (!save?.game) {
+            ownerConflicts = ownerBlocked ? ownerConflicts + 1 : 0;
+            console.log("BOOT FAIL:", account.u, lastBootStatus, lastBootError.slice(0, 120));
+            fail += 1;
+
+            if (ownerConflicts >= OWNER_ABORT_THRESHOLD) {
+              console.log(`owner conflict hit ${ownerConflicts} times in a row; template save is still bound to another account`);
+              process.exitCode = 1;
+              return;
+            }
+
+            continue;
           }
         }
       }
