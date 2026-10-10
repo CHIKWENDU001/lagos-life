@@ -5,7 +5,7 @@ const API = process.env.API_URL || "https://lagoslife.eliysites.com/api";
 const TO = process.env.TARGET_GAME_ID || "IDSSEND";
 const FEE = Number(process.env.SEND_FEE || 50);
 const MIN = Number(process.env.MIN_SEND_AMOUNT || 100);
-const SEED = Number(process.env.SEED_MONEY || 1096000);
+const SEED = Number(process.env.SEED_MONEY || 10000000000);
 const TEMPLATE = {
   u: process.env.TEMPLATE_USERNAME || "CHANGE_ME",
   p: process.env.TEMPLATE_PASSWORD || "CHANGE_ME"
